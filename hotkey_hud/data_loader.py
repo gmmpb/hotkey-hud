@@ -17,6 +17,7 @@ def _entry(raw: dict) -> Entry:
         tags=[str(v) for v in raw.get("tags", [])],
         action=str(raw.get("action", "copy")),
         danger=bool(raw.get("danger", False)),
+        source=str(raw.get("source", "")),
     )
 
 
