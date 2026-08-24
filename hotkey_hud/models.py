@@ -13,6 +13,7 @@ class Entry:
     tags: list[str] = field(default_factory=list)
     action: Literal["copy", "run"] = "copy"
     danger: bool = False
+    source: str = ""
 
 @dataclass(slots=True)
 class Group:
