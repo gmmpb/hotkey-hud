@@ -6,19 +6,28 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import tempfile
 
 from .models import Entry, Group
 
 
-def _run(*args: str, timeout: float = 1.5) -> str:
+def _run_result(*args: str, timeout: float = 1.5) -> subprocess.CompletedProcess[str] | None:
     try:
-        return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False).stdout
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
     except Exception:
-        return ""
+        return None
+
+
+def _run(*args: str, timeout: float = 1.5) -> str:
+    result = _run_result(*args, timeout=timeout)
+    return result.stdout if result else ""
+
+
+def _slug(value: str) -> str:
+    return "".join(ch.lower() if ch.isalnum() else "-" for ch in value).strip("-") or "other"
 
 
 def _parse_tmux_binding(line: str) -> tuple[str, str, str, str] | None:
-    """Return (table, key, command, note) for a `tmux list-keys` line."""
     try:
         tokens = shlex.split(line)
     except ValueError:
@@ -58,7 +67,8 @@ def detect_tmux() -> Group | None:
     if not output:
         return None
 
-    entries: list[Entry] = []
+    by_table: dict[str, list[Entry]] = {}
+    total = 0
     for idx, line in enumerate(output.splitlines()):
         parsed = _parse_tmux_binding(line)
         if not parsed:
@@ -67,7 +77,7 @@ def detect_tmux() -> Group | None:
         title = note or command
         if len(title) > 72:
             title = title[:69] + "…"
-        entries.append(
+        by_table.setdefault(table, []).append(
             Entry(
                 f"tmux-{idx}",
                 title,
@@ -78,14 +88,54 @@ def detect_tmux() -> Group | None:
                 source=f"tmux table: {table}",
             )
         )
+        total += 1
 
+    if not total:
+        return None
+
+    preferred = {"prefix": 0, "root": 1, "copy-mode-vi": 2, "copy-mode": 3}
+    children = [
+        Group(
+            f"tmux-table-{_slug(table)}",
+            f"{table} ({len(entries)})",
+            "·",
+            f"Bindings in tmux key table '{table}'",
+            entries,
+        )
+        for table, entries in sorted(by_table.items(), key=lambda item: (preferred.get(item[0], 99), item[0]))
+    ]
     return Group(
         "tmux-live",
-        f"tmux · detected ({len(entries)})",
+        f"tmux · detected ({total})",
         "▣",
-        "All bindings reported by tmux list-keys",
-        entries,
-    ) if entries else None
+        "Bindings reported by tmux list-keys, grouped by key table",
+        children=children,
+    )
+
+
+def _kde_category(section: str, action: str, label: str) -> tuple[str, str, str]:
+    text = f"{section} {action} {label}".lower()
+    section_l = section.lower()
+
+    # Owner-specific categories come first so e.g. Wacom's "Map to screen 1"
+    # stays under input devices rather than being mistaken for display management.
+    if any(word in section_l for word in ("wacom", "tablet", "touch", "input")) or any(
+        word in text for word in ("stylus", "tablet", "touch tool")
+    ):
+        return "input", "Input devices", "⌨"
+    if "spectacle" in section_l or any(word in text for word in ("screenshot", "screen shot", "capture")):
+        return "screenshots", "Screenshots & capture", "▣"
+    if any(word in text for word in ("volume", "audio", "media", "play", "pause", "microphone", "mute", "next track", "previous track")):
+        return "media", "Media & audio", "♪"
+    if any(word in text for word in ("window", "maximize", "minimize", "fullscreen", "tile", "raise", "lower", "close window")):
+        return "windows", "Window management", "□"
+    if any(word in text for word in ("desktop", "workspace", "activity", "overview", "present windows", "screen", "monitor", "output")):
+        return "workspace", "Desktops & screens", "▦"
+    if any(word in text for word in ("krunner", "launcher", "launch ", "open ", "application")):
+        return "launchers", "Launchers & applications", "⌘"
+    if any(word in text for word in ("logout", "log out", "lock screen", "suspend", "hibernate", "power off", "shutdown", "reboot")):
+        return "session", "Session & system", "⏻"
+    return "other", "Other", "…"
 
 
 def detect_kde_global() -> Group | None:
@@ -100,47 +150,100 @@ def detect_kde_global() -> Group | None:
     except Exception:
         return None
 
-    entries: list[Entry] = []
+    categories: dict[str, tuple[str, str, dict[str, list[Entry]]]] = {}
+    total = 0
     for section in parser.sections():
         for action, raw in parser.items(section):
             if action.startswith("_"):
                 continue
             parts = raw.split(",")
             shortcut = parts[0].strip()
-            if not shortcut or shortcut == "none":
+            if not shortcut or shortcut.lower() == "none":
                 continue
             label = parts[-1].strip() if len(parts) > 1 and parts[-1].strip() else action
-            entries.append(
+            category_id, category_title, category_icon = _kde_category(section, action, label)
+            if category_id not in categories:
+                categories[category_id] = (category_title, category_icon, {})
+            owners = categories[category_id][2]
+            owners.setdefault(section, []).append(
                 Entry(
                     f"kde-{section}-{action}",
                     label,
                     shortcut,
-                    f"KDE global shortcut from [{section}]",
+                    f"KDE global shortcut registered by [{section}]",
                     "shortcut",
-                    ["kde", "plasma", section, action],
+                    ["kde", "plasma", section, action, category_title],
                     source=section,
                 )
             )
+            total += 1
+
+    if not total:
+        return None
+
+    order = ["windows", "workspace", "screenshots", "media", "input", "launchers", "session", "other"]
+    category_groups: list[Group] = []
+    for category_id in order:
+        if category_id not in categories:
+            continue
+        title, icon, owners = categories[category_id]
+        owner_groups = [
+            Group(
+                f"kde-{category_id}-{_slug(owner)}",
+                f"{owner} ({len(entries)})",
+                "·",
+                f"Shortcuts registered by {owner}",
+                sorted(entries, key=lambda e: e.title.lower()),
+            )
+            for owner, entries in sorted(owners.items(), key=lambda item: item[0].lower())
+        ]
+        category_count = sum(len(entries) for entries in owners.values())
+        category_groups.append(
+            Group(
+                f"kde-category-{category_id}",
+                f"{title} ({category_count})",
+                icon,
+                f"Detected KDE shortcuts related to {title.lower()}",
+                children=owner_groups,
+            )
+        )
 
     return Group(
         "kde-live",
-        f"KDE / Plasma · detected ({len(entries)})",
+        f"KDE / Plasma · detected ({total})",
         "◆",
-        "Shortcuts from kglobalshortcutsrc. Each card shows the component that registered it.",
-        entries[:500],
-    ) if entries else None
+        "Shortcuts from kglobalshortcutsrc, organized by purpose and owning component",
+        children=category_groups,
+    )
+
+
+def _nvim_failure(detail: str) -> Group:
+    detail = detail.strip() or "Neovim did not produce mapping data."
+    if len(detail) > 700:
+        detail = detail[-700:]
+    return Group(
+        "nvim-live",
+        "Neovim · detection failed",
+        "N",
+        detail,
+        [
+            Entry(
+                "nvim-diagnostic",
+                "Copy Neovim mapping diagnostic",
+                "nvim --headless '+verbose map' '+qa'",
+                "Run this in a terminal if detection still fails and paste the output.",
+                tags=["nvim", "neovim", "diagnostic"],
+                source="Neovim detector",
+            )
+        ],
+    )
 
 
 def detect_neovim() -> Group | None:
     if not shutil.which("nvim"):
         return None
 
-    lua = r'''
-lua local modes={"n","v","x","s","o","i","c","t"}; local seen={}; for _,mode in ipairs(modes) do local lists={{kind="global",maps=vim.api.nvim_get_keymap(mode)},{kind="buffer",maps=vim.api.nvim_buf_get_keymap(0,mode)}}; for _,list in ipairs(lists) do for _,m in ipairs(list.maps) do local k=mode.."\0"..m.lhs.."\0"..(m.desc or "").."\0"..(m.rhs or ""); if not seen[k] then seen[k]=true; print(vim.json.encode({mode=mode,lhs=m.lhs,desc=m.desc or "",rhs=m.rhs or "",scope=list.kind})) end end end end
-'''.strip()
-    output = _run("nvim", "--headless", "+" + lua, "+qa", timeout=6.0)
-
-    mode_names = {
+    modes = {
         "n": "Normal",
         "v": "Visual/Select",
         "x": "Visual",
@@ -151,48 +254,104 @@ lua local modes={"n","v","x","s","o","i","c","t"}; local seen={}; for _,mode in 
         "t": "Terminal",
     }
 
-    entries: list[Entry] = []
-    for idx, line in enumerate(output.splitlines()):
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            m = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    temp = tempfile.NamedTemporaryFile(prefix="hotkey-hud-nvim-", suffix=".jsonl", delete=False)
+    temp_path = Path(temp.name)
+    temp.close()
+    try:
+        output_path = json.dumps(str(temp_path))
+        lua = (
+            "lua local modes={'n','v','x','s','o','i','c','t'}; local seen={}; local out={}; "
+            "for _,mode in ipairs(modes) do "
+            "local lists={{kind='global',maps=vim.api.nvim_get_keymap(mode)},{kind='buffer',maps=vim.api.nvim_buf_get_keymap(0,mode)}}; "
+            "for _,list in ipairs(lists) do for _,m in ipairs(list.maps) do "
+            "local k=mode..'\\0'..m.lhs..'\\0'..(m.desc or '')..'\\0'..(m.rhs or '')..'\\0'..list.kind; "
+            "if not seen[k] then seen[k]=true; table.insert(out,vim.fn.json_encode({mode=mode,lhs=m.lhs,desc=m.desc or '',rhs=m.rhs or '',scope=list.kind})) end "
+            "end end end; vim.fn.writefile(out," + output_path + ")"
+        )
+        result = _run_result("nvim", "--headless", "+" + lua, "+qa", timeout=8.0)
+        if result is None:
+            return _nvim_failure("Could not launch Neovim.")
 
-        lhs = str(m.get("lhs") or "").strip()
-        mode = str(m.get("mode") or "?")
-        desc = str(m.get("desc") or "").strip()
-        rhs = str(m.get("rhs") or "").strip()
-        scope = str(m.get("scope") or "global")
-        if not lhs:
-            continue
+        raw = temp_path.read_text(encoding="utf-8", errors="replace") if temp_path.exists() else ""
+        if not raw.strip():
+            stderr = result.stderr.strip()
+            stdout = result.stdout.strip()
+            return _nvim_failure(stderr or stdout or f"Neovim exited with status {result.returncode} without mapping data.")
 
-        title = desc or rhs or "Lua callback mapping"
-        if len(title) > 72:
-            title = title[:69] + "…"
-        mode_label = mode_names.get(mode, mode)
-        detail = rhs or ("Lua callback" if not desc else desc)
-        entries.append(
-            Entry(
+        by_mode_scope: dict[str, dict[str, list[Entry]]] = {}
+        total = 0
+        for idx, line in enumerate(raw.splitlines()):
+            try:
+                m = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            lhs = str(m.get("lhs") or "").strip()
+            mode = str(m.get("mode") or "?")
+            desc = str(m.get("desc") or "").strip()
+            rhs = str(m.get("rhs") or "").strip()
+            scope = str(m.get("scope") or "global")
+            if not lhs:
+                continue
+
+            title = desc or rhs or "Lua callback mapping"
+            if len(title) > 72:
+                title = title[:69] + "…"
+            mode_label = modes.get(mode, mode)
+            detail = rhs or ("Lua callback" if not desc else desc)
+            entry = Entry(
                 f"nvim-{idx}",
-                f"[{mode_label}] {title}",
+                title,
                 lhs,
                 detail,
                 "shortcut",
                 ["nvim", "neovim", mode, mode_label.lower(), scope],
                 source=f"Neovim · {mode_label} · {scope}",
             )
-        )
+            by_mode_scope.setdefault(mode, {}).setdefault(scope, []).append(entry)
+            total += 1
 
-    return Group(
-        "nvim-live",
-        f"Neovim · detected ({len(entries)})",
-        "N",
-        "Loaded global and current-buffer mappings across Normal, Visual, Select, Operator, Insert, Command and Terminal modes",
-        entries,
-    ) if entries else None
+        if not total:
+            return _nvim_failure("Neovim returned mapping data, but none of it could be parsed.")
+
+        mode_groups: list[Group] = []
+        for mode, mode_label in modes.items():
+            scopes = by_mode_scope.get(mode)
+            if not scopes:
+                continue
+            scope_groups = [
+                Group(
+                    f"nvim-{mode}-{scope}",
+                    f"{scope.title()} ({len(entries)})",
+                    "·",
+                    f"{mode_label} mode {scope} mappings",
+                    sorted(entries, key=lambda e: e.value.lower()),
+                )
+                for scope, entries in sorted(scopes.items(), key=lambda item: (0 if item[0] == "global" else 1, item[0]))
+            ]
+            mode_count = sum(len(entries) for entries in scopes.values())
+            mode_groups.append(
+                Group(
+                    f"nvim-mode-{mode}",
+                    f"{mode_label} ({mode_count})",
+                    mode.upper(),
+                    f"Neovim {mode_label.lower()} mode mappings",
+                    children=scope_groups,
+                )
+            )
+
+        return Group(
+            "nvim-live",
+            f"Neovim · detected ({total})",
+            "N",
+            "Loaded mappings from your real Neovim configuration, grouped by mode and scope",
+            children=mode_groups,
+        )
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def detect_groups() -> list[Group]:
