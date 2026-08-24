@@ -7,6 +7,7 @@ import sys
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QShortcut
 
 from .kde_perf_app import HudWindow as KdeHudWindow
 from .models import Entry, Group
@@ -99,6 +100,13 @@ class HudWindow(KdeHudWindow):
         cached_groups, cached_serialized = _load_cached_groups()
         self._cached_serialized = cached_serialized
         super().__init__()
+
+        # Be defensive about older/inherited shortcut layers: the HUD must never
+        # own Alt+Arrow. KWin remains the sole authority for those combinations.
+        for shortcut in self.findChildren(QShortcut):
+            key = shortcut.key().toString()
+            if key.startswith("Alt+"):
+                shortcut.setEnabled(False)
 
         # The base window intentionally starts without detected data so first
         # paint is immediate. On subsequent launches, hydrate from disk before
