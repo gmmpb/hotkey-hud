@@ -40,7 +40,6 @@ def _parse_tmux_binding(line: str) -> tuple[str, str, str, str] | None:
             note = tokens[i + 1]
             i += 2
             continue
-        # -n / -r and combined flag forms such as -nr take no value.
         i += 1
 
     if i >= len(tokens):
@@ -76,33 +75,32 @@ def detect_tmux() -> Group | None:
                 line,
                 "shortcut",
                 ["tmux", table, key],
+                source=f"tmux table: {table}",
             )
         )
 
-    return (
-        Group(
-            "tmux-live",
-            f"tmux · detected ({len(entries)})",
-            "▣",
-            "All bindings reported by tmux list-keys",
-            entries,
-        )
-        if entries
-        else None
-    )
+    return Group(
+        "tmux-live",
+        f"tmux · detected ({len(entries)})",
+        "▣",
+        "All bindings reported by tmux list-keys",
+        entries,
+    ) if entries else None
 
 
 def detect_kde_global() -> Group | None:
     path = Path.home() / ".config" / "kglobalshortcutsrc"
     if not path.exists():
         return None
+
     parser = configparser.ConfigParser(interpolation=None, strict=False)
     parser.optionxform = str
     try:
         parser.read(path, encoding="utf-8")
     except Exception:
         return None
-    entries = []
+
+    entries: list[Entry] = []
     for section in parser.sections():
         for action, raw in parser.items(section):
             if action.startswith("_"):
@@ -112,18 +110,33 @@ def detect_kde_global() -> Group | None:
             if not shortcut or shortcut == "none":
                 continue
             label = parts[-1].strip() if len(parts) > 1 and parts[-1].strip() else action
-            entries.append(Entry(f"kde-{section}-{action}", label, shortcut, section, "shortcut", ["kde", "plasma", section]))
-    return Group("kde-live", "KDE / Plasma · detected", "◆", "Shortcuts from kglobalshortcutsrc", entries[:500]) if entries else None
+            entries.append(
+                Entry(
+                    f"kde-{section}-{action}",
+                    label,
+                    shortcut,
+                    f"KDE global shortcut from [{section}]",
+                    "shortcut",
+                    ["kde", "plasma", section, action],
+                    source=section,
+                )
+            )
+
+    return Group(
+        "kde-live",
+        f"KDE / Plasma · detected ({len(entries)})",
+        "◆",
+        "Shortcuts from kglobalshortcutsrc. Each card shows the component that registered it.",
+        entries[:500],
+    ) if entries else None
 
 
 def detect_neovim() -> Group | None:
     if not shutil.which("nvim"):
         return None
 
-    # Query every useful mapping mode and include both global and current-buffer
-    # maps. JSON-lines avoids losing mappings whose lhs/rhs contains whitespace.
     lua = r'''
-lua local modes={"n","v","x","s","o","i","c","t"}; local seen={}; for _,mode in ipairs(modes) do local lists={vim.api.nvim_get_keymap(mode),vim.api.nvim_buf_get_keymap(0,mode)}; for _,maps in ipairs(lists) do for _,m in ipairs(maps) do local k=mode.."\0"..m.lhs.."\0"..(m.desc or "").."\0"..(m.rhs or ""); if not seen[k] then seen[k]=true; print(vim.json.encode({mode=mode,lhs=m.lhs,desc=m.desc or "",rhs=m.rhs or "",buffer=m.buffer or 0})) end end end end
+lua local modes={"n","v","x","s","o","i","c","t"}; local seen={}; for _,mode in ipairs(modes) do local lists={{kind="global",maps=vim.api.nvim_get_keymap(mode)},{kind="buffer",maps=vim.api.nvim_buf_get_keymap(0,mode)}}; for _,list in ipairs(lists) do for _,m in ipairs(list.maps) do local k=mode.."\0"..m.lhs.."\0"..(m.desc or "").."\0"..(m.rhs or ""); if not seen[k] then seen[k]=true; print(vim.json.encode({mode=mode,lhs=m.lhs,desc=m.desc or "",rhs=m.rhs or "",scope=list.kind})) end end end end
 '''.strip()
     output = _run("nvim", "--headless", "+" + lua, "+qa", timeout=6.0)
 
@@ -152,6 +165,7 @@ lua local modes={"n","v","x","s","o","i","c","t"}; local seen={}; for _,mode in 
         mode = str(m.get("mode") or "?")
         desc = str(m.get("desc") or "").strip()
         rhs = str(m.get("rhs") or "").strip()
+        scope = str(m.get("scope") or "global")
         if not lhs:
             continue
 
@@ -167,21 +181,18 @@ lua local modes={"n","v","x","s","o","i","c","t"}; local seen={}; for _,mode in 
                 lhs,
                 detail,
                 "shortcut",
-                ["nvim", "neovim", mode, mode_label.lower()],
+                ["nvim", "neovim", mode, mode_label.lower(), scope],
+                source=f"Neovim · {mode_label} · {scope}",
             )
         )
 
-    return (
-        Group(
-            "nvim-live",
-            f"Neovim · detected ({len(entries)})",
-            "N",
-            "Loaded global and current-buffer mappings across Normal, Visual, Select, Operator, Insert, Command and Terminal modes",
-            entries,
-        )
-        if entries
-        else None
-    )
+    return Group(
+        "nvim-live",
+        f"Neovim · detected ({len(entries)})",
+        "N",
+        "Loaded global and current-buffer mappings across Normal, Visual, Select, Operator, Insert, Command and Terminal modes",
+        entries,
+    ) if entries else None
 
 
 def detect_groups() -> list[Group]:
