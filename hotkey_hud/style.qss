@@ -1,0 +1,30 @@
+QMainWindow { background: transparent; }
+#shell { background: #11141a; border: 1px solid #2a303a; border-radius: 18px; }
+QLabel { color: #d9e0ea; font-size: 13px; }
+#brand { color: #f4f7fb; font-size: 15px; font-weight: 800; letter-spacing: 1px; }
+#hint { color: #737d8c; font-size: 11px; }
+QLineEdit { background: #191e26; color: #f5f7fa; border: 1px solid #2d3541; border-radius: 11px; padding: 11px 14px; font-size: 14px; selection-background-color: #5577ff; }
+QLineEdit:focus { border: 1px solid #617dff; }
+#sidebar { background: #151920; border: 1px solid #252b34; border-radius: 12px; padding: 8px; color: #cbd3df; outline: none; }
+#sidebar::item { padding: 8px 6px; border-radius: 7px; }
+#sidebar::item:selected { background: #252d3a; color: white; }
+#sidebar::item:hover { background: #1e242d; }
+QScrollArea { background: transparent; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }
+QScrollBar::handle:vertical { background: #303845; border-radius: 4px; min-height: 35px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+#pageTitle { font-size: 20px; font-weight: 800; color: #f5f7fb; padding: 2px 0 4px 2px; }
+#groupTitle { font-size: 15px; font-weight: 700; color: #f2f5f9; }
+#groupDescription { color: #7f8997; padding: 0 0 2px 2px; }
+#entryCard { background: #181d24; border: 1px solid #242b35; border-radius: 10px; }
+#entryCard:hover { background: #1c222b; border: 1px solid #303a48; }
+#entryTitle { font-weight: 650; color: #e9edf3; }
+#entryDescription { color: #778291; font-size: 11px; }
+#keycap, #commandPill { background: #0e1116; color: #cbd5e5; border: 1px solid #333b48; border-radius: 7px; padding: 5px 9px; font-family: monospace; }
+#keycap { color: #c8d2ff; }
+QPushButton { background: #5976ff; color: white; border: none; border-radius: 7px; padding: 6px 10px; font-weight: 650; }
+QPushButton:hover { background: #6b85ff; }
+#ghostButton { background: #252c35; color: #c9d2df; }
+#ghostButton:hover { background: #303946; }
+#empty { color: #737d8b; padding: 24px; }
