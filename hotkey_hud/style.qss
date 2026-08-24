@@ -5,12 +5,16 @@ QLabel { color: #d9e0ea; font-size: 13px; }
 #hint { color: #737d8c; font-size: 11px; }
 QLineEdit { background: #191e26; color: #f5f7fa; border: 1px solid #2d3541; border-radius: 11px; padding: 11px 14px; font-size: 14px; selection-background-color: #5577ff; }
 QLineEdit:focus { border: 1px solid #617dff; }
-#sidebar { background: #151920; border: 1px solid #252b34; border-radius: 12px; padding: 8px; color: #cbd3df; outline: none; show-decoration-selected: 1; }
+#sidebar { background: #151920; border: 1px solid #252b34; border-radius: 12px; padding: 8px; color: #cbd3df; outline: none; show-decoration-selected: 0; }
 #sidebar::item { min-height: 30px; padding: 6px 8px; border: none; border-radius: 7px; outline: none; }
 #sidebar::item:selected { background: #293244; color: #ffffff; border: none; outline: none; }
 #sidebar::item:selected:active { background: #293244; color: #ffffff; border: none; }
 #sidebar::item:selected:!active { background: #293244; color: #ffffff; border: none; }
 #sidebar::item:hover:!selected { background: #1e242d; }
+#sidebar::branch { background: transparent; border: none; }
+#sidebar::branch:selected { background: transparent; border: none; }
+#sidebar::branch:active { background: transparent; border: none; }
+#sidebar::branch:hover { background: transparent; border: none; }
 QScrollArea { background: transparent; }
 QScrollArea > QWidget > QWidget { background: transparent; }
 QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }
