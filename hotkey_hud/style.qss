@@ -20,6 +20,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 #entryCard { background: #181d24; border: 1px solid #242b35; border-radius: 10px; }
 #entryCard:hover { background: #1c222b; border: 1px solid #303a48; }
 #entryTitle { font-weight: 650; color: #e9edf3; }
+#entrySource { color: #8fa3ff; font-size: 11px; font-weight: 600; }
 #entryDescription { color: #778291; font-size: 11px; }
 #keycap, #commandPill { background: #0e1116; color: #cbd5e5; border: 1px solid #333b48; border-radius: 7px; padding: 5px 9px; font-family: monospace; }
 #keycap { color: #c8d2ff; }
