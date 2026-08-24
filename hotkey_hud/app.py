@@ -25,6 +25,11 @@ class EntryCard(QFrame):
         title = QLabel(entry.title)
         title.setObjectName("entryTitle")
         text.addWidget(title)
+        if entry.source:
+            source = QLabel(f"Used by: {entry.source}")
+            source.setObjectName("entrySource")
+            source.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            text.addWidget(source)
         if entry.description:
             desc = QLabel(entry.description)
             desc.setWordWrap(True)
@@ -152,7 +157,7 @@ class HudWindow(QMainWindow):
     def _matches(self, entry: Entry, query: str):
         if not query:
             return True
-        hay = " ".join([entry.title, entry.value, entry.description, *entry.tags]).lower()
+        hay = " ".join([entry.title, entry.value, entry.description, entry.source, *entry.tags]).lower()
         return all(token in hay for token in query.lower().split())
 
     def _clear_content(self):
