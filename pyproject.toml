@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-hotkey-hud = "hotkey_hud.app:main"
+hotkey-hud = "hotkey_hud.fast_app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["hotkey_hud"]
