@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QGuiApplication, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -18,6 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -35,8 +38,15 @@ def _walk_groups(groups: list[Group]):
         yield from _walk_groups(group.children)
 
 
+def _group_count(group: Group) -> int:
+    return len(group.entries) + sum(_group_count(child) for child in group.children)
+
+
+def _strip_count(title: str) -> str:
+    return re.sub(r"\s+\(\d+\)$", "", title)
+
+
 def _kde_conflict_group(groups: list[Group]) -> Group | None:
-    """Build a compact list of exact KDE global-shortcut collisions."""
     by_shortcut: dict[str, list[Entry]] = defaultdict(list)
     for group in _walk_groups(groups):
         for entry in group.entries:
@@ -48,7 +58,6 @@ def _kde_conflict_group(groups: list[Group]) -> Group | None:
 
     conflicts: list[Entry] = []
     for entries in by_shortcut.values():
-        owners = {entry.source or "unknown" for entry in entries}
         actions = {(entry.source, entry.title) for entry in entries}
         if len(actions) < 2:
             continue
@@ -61,7 +70,7 @@ def _kde_conflict_group(groups: list[Group]) -> Group | None:
                 value=shortcut,
                 description=detail,
                 kind="shortcut",
-                tags=["kde", "conflict", shortcut, *owners],
+                tags=["kde", "conflict", shortcut],
                 source="KDE global shortcuts",
             )
         )
@@ -120,7 +129,7 @@ class EntryCard(QFrame):
         value.setTextInteractionFlags(Qt.TextSelectableByMouse)
         value.setObjectName("keycap" if entry.kind == "shortcut" else "commandPill")
         value.setWordWrap(True)
-        value.setMaximumWidth(330 if entry.kind == "command" else 260)
+        value.setMaximumWidth(330 if entry.kind == "command" else 250)
         value.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         root.addWidget(value, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
@@ -137,9 +146,10 @@ class EntryCard(QFrame):
 
 
 class CollapsibleGroup(QFrame):
-    def __init__(self, group: Group, entries: list[Entry], expanded: bool = True, parent=None):
+    def __init__(self, group: Group, entries: list[Entry], expanded: bool, on_toggle, parent=None):
         super().__init__(parent)
         self.group = group
+        self.on_toggle = on_toggle
         self.setObjectName("groupPanel")
 
         root = QVBoxLayout(self)
@@ -169,13 +179,15 @@ class CollapsibleGroup(QFrame):
             body_layout.addWidget(EntryCard(entry))
 
         root.addWidget(self.body)
-        self._sync_state()
+        self._sync_state(notify=False)
 
-    def _sync_state(self):
+    def _sync_state(self, notify: bool = True):
         expanded = self.toggle.isChecked()
         self.body.setVisible(expanded)
         marker = "▾" if expanded else "▸"
         self.toggle.setText(f"{marker}  {self.group.icon}  {self.group.title}")
+        if notify:
+            self.on_toggle(self.group.id, expanded)
 
     def set_expanded(self, expanded: bool):
         self.toggle.setChecked(expanded)
@@ -185,58 +197,86 @@ class CollapsibleGroup(QFrame):
 class HudWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.settings = QSettings("gmmpb", "hotkey-hud")
+        self.collapse_state = self._load_json_setting("collapse_state", {})
+        self.visible_groups: list[CollapsibleGroup] = []
+        self.sections: list[Section] = []
+
         self.setWindowTitle("Hotkey HUD")
-        self.resize(1120, 720)
-        self.setMinimumSize(840, 560)
+        self.setWindowIcon(QIcon.fromTheme("input-keyboard"))
+        self.resize(1160, 760)
+        self.setMinimumSize(860, 560)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
-        self.sections = load_sections()
-        detected = detect_groups()
-        if detected:
-            conflict_group = _kde_conflict_group(detected)
-            if conflict_group:
-                detected.insert(0, conflict_group)
-            self.sections.insert(0, Section("detected", "Detected", "◉", detected))
-        self.visible_groups: list[CollapsibleGroup] = []
+        geometry = self.settings.value("geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
 
         shell = QFrame()
         shell.setObjectName("shell")
         self.setCentralWidget(shell)
         outer = QVBoxLayout(shell)
-        outer.setContentsMargins(18, 18, 18, 14)
+        outer.setContentsMargins(18, 16, 18, 14)
         outer.setSpacing(12)
 
         top = QHBoxLayout()
-        brand = QLabel("⌨  HOTKEY HUD")
+        icon = QLabel()
+        pixmap = self.windowIcon().pixmap(22, 22)
+        if not pixmap.isNull():
+            icon.setPixmap(pixmap)
+            top.addWidget(icon)
+        brand = QLabel("HOTKEY HUD")
         brand.setObjectName("brand")
         top.addWidget(brand)
+        source_status = QLabel("live shortcuts · local config")
+        source_status.setObjectName("statusPill")
+        top.addWidget(source_status)
         top.addStretch()
-        hint = QLabel("Esc close  ·  / search")
+        hint = QLabel("Esc close  ·  / search  ·  Ctrl+R refresh")
         hint.setObjectName("hint")
         top.addWidget(hint)
+        refresh = QPushButton("↻  Refresh")
+        refresh.setObjectName("ghostButton")
+        refresh.clicked.connect(self.refresh_sources)
+        top.addWidget(refresh)
         outer.addLayout(top)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search shortcuts, commands, tools, descriptions…")
+        self.search.setPlaceholderText("Search…  source:kwin  app:nvim  kind:shortcut  key:meta+f")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.render_current)
         outer.addWidget(self.search)
 
-        body = QHBoxLayout()
-        body.setSpacing(14)
-        outer.addLayout(body, 1)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setObjectName("mainSplitter")
+        self.splitter.setChildrenCollapsible(False)
+        outer.addWidget(self.splitter, 1)
 
         self.tree = QTreeWidget()
         self.tree.setObjectName("sidebar")
         self.tree.setHeaderHidden(True)
-        self.tree.setIndentation(14)
-        self.tree.setFixedWidth(285)
+        self.tree.setIndentation(15)
+        self.tree.setMinimumWidth(220)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tree.setUniformRowHeights(True)
         self.tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.tree.itemSelectionChanged.connect(self.render_current)
-        body.addWidget(self.tree)
+        self.tree.itemSelectionChanged.connect(self._selection_changed)
+        self.splitter.addWidget(self.tree)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(8)
+        self.splitter.addWidget(right)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+
+        self.page_header = QWidget()
+        self.page_header.setObjectName("pageHeader")
+        self.page_header_layout = QHBoxLayout(self.page_header)
+        self.page_header_layout.setContentsMargins(2, 0, 2, 0)
+        right_layout.addWidget(self.page_header)
 
         self.content = QWidget()
         self.content_layout = QVBoxLayout(self.content)
@@ -247,29 +287,77 @@ class HudWindow(QMainWindow):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.scroll.setWidget(self.content)
-        body.addWidget(self.scroll, 1)
+        right_layout.addWidget(self.scroll, 1)
 
-        self._populate_tree()
-        self._install_shortcuts()
+        splitter_sizes = self._load_json_setting("splitter_sizes", [285, 850])
+        if isinstance(splitter_sizes, list) and len(splitter_sizes) == 2:
+            self.splitter.setSizes([int(v) for v in splitter_sizes])
+
         self._load_style()
+        self._reload_sections(restore_selection=True)
+        self._install_shortcuts()
         QTimer.singleShot(0, self.search.setFocus)
+
+    def _load_json_setting(self, key: str, default):
+        raw = self.settings.value(key)
+        if not raw:
+            return default
+        try:
+            return json.loads(str(raw))
+        except Exception:
+            return default
+
+    def _save_json_setting(self, key: str, value):
+        self.settings.setValue(key, json.dumps(value))
+
+    def _build_sections(self):
+        sections = load_sections()
+        detected = detect_groups()
+        if detected:
+            conflict_group = _kde_conflict_group(detected)
+            if conflict_group:
+                detected.insert(0, conflict_group)
+            sections.insert(0, Section("detected", "Detected", "◉", detected))
+        return sections
+
+    def _reload_sections(self, restore_selection: bool = False):
+        current = self._current_selection_key() if self.tree.topLevelItemCount() else None
+        if restore_selection:
+            current = (
+                str(self.settings.value("selected_section", "")),
+                str(self.settings.value("selected_group", "")) or None,
+            )
+
+        self.sections = self._build_sections()
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        self._populate_tree()
+        self.tree.blockSignals(False)
+
+        if not self._restore_selection(current):
+            if self.tree.topLevelItemCount():
+                first = self.tree.topLevelItem(0)
+                self.tree.setCurrentItem(first.child(0) if first.childCount() else first)
+        self.render_current()
+
+    def refresh_sources(self):
+        self._reload_sections()
 
     def _populate_tree(self):
         for section in self.sections:
             parent = QTreeWidgetItem([f"{section.icon}  {section.title}"])
-            parent.setData(0, Qt.UserRole, (section.id, None))
+            parent.setData(0, Qt.ItemDataRole.UserRole, (section.id, None))
             self.tree.addTopLevelItem(parent)
             for group in section.groups:
                 self._add_group(parent, section.id, group)
             parent.setExpanded(True)
 
-        if self.tree.topLevelItemCount():
-            first = self.tree.topLevelItem(0)
-            self.tree.setCurrentItem(first.child(0) if first.childCount() else first)
-
     def _add_group(self, parent, section_id: str, group: Group):
-        item = QTreeWidgetItem([f"{group.icon}  {group.title}"])
-        item.setData(0, Qt.UserRole, (section_id, group.id))
+        count = _group_count(group)
+        title = _strip_count(group.title)
+        display = f"{group.icon}  {title} ({count})" if count else f"{group.icon}  {title}"
+        item = QTreeWidgetItem([display])
+        item.setData(0, Qt.ItemDataRole.UserRole, (section_id, group.id))
         parent.addChild(item)
         for child in group.children:
             self._add_group(item, section_id, child)
@@ -277,11 +365,37 @@ class HudWindow(QMainWindow):
     def _all_groups(self, groups):
         yield from _walk_groups(groups)
 
+    def _current_selection_key(self):
+        items = self.tree.selectedItems()
+        return items[0].data(0, Qt.ItemDataRole.UserRole) if items else None
+
+    def _restore_selection(self, key) -> bool:
+        if not key or not key[0]:
+            return False
+        iterator = QTreeWidgetItemIteratorCompat(self.tree)
+        for item in iterator:
+            if item.data(0, Qt.ItemDataRole.UserRole) == key:
+                self.tree.setCurrentItem(item)
+                item.setSelected(True)
+                parent = item.parent()
+                while parent:
+                    parent.setExpanded(True)
+                    parent = parent.parent()
+                return True
+        return False
+
+    def _selection_changed(self):
+        key = self._current_selection_key()
+        if key:
+            self.settings.setValue("selected_section", key[0])
+            self.settings.setValue("selected_group", key[1] or "")
+        self.render_current()
+
     def _selected_group(self):
         items = self.tree.selectedItems()
         if not items:
             return None, None
-        section_id, group_id = items[0].data(0, Qt.UserRole)
+        section_id, group_id = items[0].data(0, Qt.ItemDataRole.UserRole)
         section = next((s for s in self.sections if s.id == section_id), None)
         if not section:
             return None, None
@@ -290,14 +404,69 @@ class HudWindow(QMainWindow):
         group = next((g for g in self._all_groups(section.groups) if g.id == group_id), None)
         return section, group
 
-    def _matches(self, entry: Entry, query: str):
+    def _parse_query(self, query: str):
+        filters: dict[str, list[str]] = defaultdict(list)
+        terms: list[str] = []
+        for token in query.split():
+            if ":" in token:
+                key, value = token.split(":", 1)
+                key = key.lower()
+                if key in {"source", "app", "kind", "key"} and value:
+                    filters[key].append(value.lower())
+                    continue
+            terms.append(token.lower())
+        return filters, terms
+
+    def _entry_score(self, entry: Entry, query: str) -> int | None:
         if not query:
-            return True
-        hay = " ".join([entry.title, entry.value, entry.description, entry.source, *entry.tags]).lower()
-        return all(token in hay for token in query.lower().split())
+            return 0
+        filters, terms = self._parse_query(query)
+        title = entry.title.lower()
+        value = entry.value.lower()
+        source = entry.source.lower()
+        tags = " ".join(entry.tags).lower()
+        desc = entry.description.lower()
+        hay = " ".join((title, value, source, tags, desc))
+
+        for expected in filters.get("source", []):
+            if expected not in source:
+                return None
+        for expected in filters.get("app", []):
+            if expected not in source and expected not in tags:
+                return None
+        for expected in filters.get("kind", []):
+            if expected != entry.kind.lower():
+                return None
+        for expected in filters.get("key", []):
+            compact_expected = expected.replace(" ", "")
+            compact_value = value.replace(" ", "")
+            if compact_expected not in compact_value:
+                return None
+
+        score = 0
+        for term in terms:
+            if term not in hay:
+                return None
+            compact_term = term.replace(" ", "")
+            if compact_term == value.replace(" ", ""):
+                score += 140
+            elif title == term:
+                score += 120
+            elif title.startswith(term):
+                score += 90
+            elif term in title:
+                score += 70
+            elif term in value:
+                score += 60
+            elif term in source:
+                score += 35
+            elif term in tags:
+                score += 25
+            else:
+                score += 10
+        return score
 
     def _clear_layout(self, layout):
-        """Recursively delete every widget and nested layout from a Qt layout."""
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
@@ -311,6 +480,11 @@ class HudWindow(QMainWindow):
     def _clear_content(self):
         self.visible_groups = []
         self._clear_layout(self.content_layout)
+        self._clear_layout(self.page_header_layout)
+
+    def _on_group_toggle(self, group_id: str, expanded: bool):
+        self.collapse_state[group_id] = expanded
+        self._save_json_setting("collapse_state", self.collapse_state)
 
     def _set_all_groups(self, expanded: bool):
         for panel in self.visible_groups:
@@ -328,61 +502,103 @@ class HudWindow(QMainWindow):
             title = "Search results"
         elif group:
             groups = list(self._all_groups([group]))
-            title = group.title
+            title = _strip_count(group.title)
         elif section:
             groups = list(self._all_groups(section.groups))
             title = section.title
         else:
             return
 
-        heading = QHBoxLayout()
         page_title = QLabel(title)
         page_title.setObjectName("pageTitle")
-        heading.addWidget(page_title)
-        heading.addStretch()
+        self.page_header_layout.addWidget(page_title)
+        self.page_header_layout.addStretch()
 
         expand_all = QPushButton("Expand all")
-        expand_all.setObjectName("ghostButton")
+        expand_all.setObjectName("subtleButton")
         expand_all.clicked.connect(lambda: self._set_all_groups(True))
-        heading.addWidget(expand_all)
+        self.page_header_layout.addWidget(expand_all)
 
         collapse_all = QPushButton("Collapse all")
-        collapse_all.setObjectName("ghostButton")
+        collapse_all.setObjectName("subtleButton")
         collapse_all.clicked.connect(lambda: self._set_all_groups(False))
-        heading.addWidget(collapse_all)
-        self.content_layout.addLayout(heading)
+        self.page_header_layout.addWidget(collapse_all)
 
         shown = 0
         for g in groups:
-            entries = [e for e in g.entries if self._matches(e, query)]
-            if not entries:
+            ranked: list[tuple[int, Entry]] = []
+            for entry in g.entries:
+                score = self._entry_score(entry, query)
+                if score is not None:
+                    ranked.append((score, entry))
+            if not ranked:
                 continue
-            expanded = bool(query) or (group is g) or len(entries) <= 8
-            panel = CollapsibleGroup(g, entries, expanded=expanded)
+            ranked.sort(key=lambda pair: (-pair[0], pair[1].title.lower()))
+            entries = [entry for _, entry in ranked]
+
+            default_expanded = bool(query) or (group is g) or len(entries) <= 8
+            expanded = bool(self.collapse_state.get(g.id, default_expanded))
+            panel = CollapsibleGroup(g, entries, expanded=expanded, on_toggle=self._on_group_toggle)
             self.visible_groups.append(panel)
             self.content_layout.addWidget(panel)
             shown += len(entries)
 
         if shown == 0:
-            empty = QLabel("No matching shortcuts or commands")
+            empty = QLabel(
+                "No matching shortcuts or commands.\n"
+                "Try plain text, a key combo, or filters such as source:kwin, app:nvim, kind:shortcut, key:meta+f."
+            )
+            empty.setWordWrap(True)
             empty.setObjectName("empty")
             self.content_layout.addWidget(empty)
 
         self.content_layout.addStretch(1)
 
+    def _escape(self):
+        if self.search.text():
+            self.search.clear()
+            self.search.setFocus()
+        else:
+            self.close()
+
     def _install_shortcuts(self):
-        QShortcut(QKeySequence("Escape"), self, activated=self.close)
+        QShortcut(QKeySequence("Escape"), self, activated=self._escape)
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self.search.setFocus)
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=self.search.setFocus)
         QShortcut(QKeySequence("/"), self, activated=self.search.setFocus)
+        QShortcut(QKeySequence("Ctrl+R"), self, activated=self.refresh_sources)
 
     def _load_style(self):
         path = Path(__file__).resolve().parent / "style.qss"
         self.setStyleSheet(path.read_text(encoding="utf-8"))
 
+    def closeEvent(self, event: QCloseEvent):
+        self.settings.setValue("geometry", self.saveGeometry())
+        self._save_json_setting("splitter_sizes", self.splitter.sizes())
+        super().closeEvent(event)
+
+
+class QTreeWidgetItemIteratorCompat:
+    """Tiny iterator helper that avoids depending on a separate Qt iterator import."""
+
+    def __init__(self, tree: QTreeWidget):
+        self.items: list[QTreeWidgetItem] = []
+        for i in range(tree.topLevelItemCount()):
+            self._append(tree.topLevelItem(i))
+
+    def _append(self, item: QTreeWidgetItem):
+        self.items.append(item)
+        for i in range(item.childCount()):
+            self._append(item.child(i))
+
+    def __iter__(self):
+        return iter(self.items)
+
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Hotkey HUD")
+    app.setOrganizationName("gmmpb")
     window = HudWindow()
     window.show()
     window.raise_()
