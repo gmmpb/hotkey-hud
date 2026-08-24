@@ -95,7 +95,7 @@ class HudWindow(QMainWindow):
         self.tree.setObjectName("sidebar")
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(14)
-        self.tree.setFixedWidth(250)
+        self.tree.setFixedWidth(270)
         self.tree.itemSelectionChanged.connect(self.render_current)
         body.addWidget(self.tree)
 
@@ -177,7 +177,7 @@ class HudWindow(QMainWindow):
                 groups.extend(self._all_groups(sec.groups))
             title = "Search results"
         elif group:
-            groups = [group]
+            groups = list(self._all_groups([group]))
             title = group.title
         elif section:
             groups = list(self._all_groups(section.groups))
