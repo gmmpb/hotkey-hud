@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-hotkey-hud = "hotkey_hud.kde_perf_app:main"
+hotkey-hud = "hotkey_hud.cached_app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["hotkey_hud"]
