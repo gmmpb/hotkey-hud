@@ -124,8 +124,6 @@ class EntryCard(QFrame):
         value.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         root.addWidget(value, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        # Shortcuts are reference material; a Copy button added noise and could
-        # push long tmux/Neovim rows outside the viewport. Commands remain copyable.
         if entry.kind == "command":
             copy = QPushButton("Copy")
             copy.setObjectName("ghostButton")
@@ -236,9 +234,6 @@ class HudWindow(QMainWindow):
         self.tree.setFixedWidth(285)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tree.setUniformRowHeights(True)
-        # KDE's item-view focus indicator can render as a bright little square
-        # beside the selected row. Mouse selection is enough for this launcher;
-        # the background highlight remains the selection affordance.
         self.tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tree.itemSelectionChanged.connect(self.render_current)
         body.addWidget(self.tree)
@@ -301,13 +296,21 @@ class HudWindow(QMainWindow):
         hay = " ".join([entry.title, entry.value, entry.description, entry.source, *entry.tags]).lower()
         return all(token in hay for token in query.lower().split())
 
+    def _clear_layout(self, layout):
+        """Recursively delete every widget and nested layout from a Qt layout."""
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if widget is not None:
+                widget.deleteLater()
+            elif child_layout is not None:
+                self._clear_layout(child_layout)
+                child_layout.deleteLater()
+
     def _clear_content(self):
         self.visible_groups = []
-        while self.content_layout.count():
-            item = self.content_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
+        self._clear_layout(self.content_layout)
 
     def _set_all_groups(self, expanded: bool):
         for panel in self.visible_groups:
