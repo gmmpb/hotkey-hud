@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 import subprocess
 import sys
@@ -28,6 +29,55 @@ from .detectors import detect_groups
 from .models import Entry, Group, Section
 
 
+def _walk_groups(groups: list[Group]):
+    for group in groups:
+        yield group
+        yield from _walk_groups(group.children)
+
+
+def _kde_conflict_group(groups: list[Group]) -> Group | None:
+    """Build a compact list of exact KDE global-shortcut collisions."""
+    by_shortcut: dict[str, list[Entry]] = defaultdict(list)
+    for group in _walk_groups(groups):
+        for entry in group.entries:
+            if entry.kind != "shortcut" or "kde" not in entry.tags:
+                continue
+            key = entry.value.lower().replace(" ", "")
+            if key:
+                by_shortcut[key].append(entry)
+
+    conflicts: list[Entry] = []
+    for entries in by_shortcut.values():
+        owners = {entry.source or "unknown" for entry in entries}
+        actions = {(entry.source, entry.title) for entry in entries}
+        if len(actions) < 2:
+            continue
+        shortcut = entries[0].value
+        detail = " · ".join(f"{entry.source or 'unknown'}: {entry.title}" for entry in entries)
+        conflicts.append(
+            Entry(
+                id=f"kde-conflict-{len(conflicts)}",
+                title=f"{len(entries)} actions use this shortcut",
+                value=shortcut,
+                description=detail,
+                kind="shortcut",
+                tags=["kde", "conflict", shortcut, *owners],
+                source="KDE global shortcuts",
+            )
+        )
+
+    if not conflicts:
+        return None
+    conflicts.sort(key=lambda entry: entry.value.lower())
+    return Group(
+        "kde-conflicts",
+        f"Shortcut conflicts ({len(conflicts)})",
+        "⚠",
+        "Exact duplicate key combinations found in KDE global shortcuts. Some duplicates may be intentional or context-specific.",
+        conflicts,
+    )
+
+
 class EntryCard(QFrame):
     def __init__(self, entry: Entry, parent=None):
         super().__init__(parent)
@@ -37,37 +87,55 @@ class EntryCard(QFrame):
         root.setContentsMargins(14, 11, 14, 11)
         root.setSpacing(12)
 
-        text = QVBoxLayout()
+        text_host = QWidget()
+        text_host.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        text = QVBoxLayout(text_host)
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(3)
+
         title = QLabel(entry.title)
         title.setObjectName("entryTitle")
+        title.setWordWrap(True)
+        title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         text.addWidget(title)
+
         if entry.source:
             source = QLabel(f"Used by: {entry.source}")
             source.setObjectName("entrySource")
             source.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            source.setWordWrap(True)
+            source.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             text.addWidget(source)
+
         if entry.description:
             desc = QLabel(entry.description)
             desc.setWordWrap(True)
             desc.setObjectName("entryDescription")
+            desc.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             text.addWidget(desc)
-        root.addLayout(text, 1)
+
+        root.addWidget(text_host, 1)
 
         value = QLabel(entry.value)
         value.setTextInteractionFlags(Qt.TextSelectableByMouse)
         value.setObjectName("keycap" if entry.kind == "shortcut" else "commandPill")
-        value.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-        root.addWidget(value)
+        value.setWordWrap(True)
+        value.setMaximumWidth(330 if entry.kind == "command" else 260)
+        value.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        root.addWidget(value, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        copy = QPushButton("Copy")
-        copy.setObjectName("ghostButton")
-        copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(entry.value))
-        root.addWidget(copy)
+        # Shortcuts are reference material; a Copy button added noise and could
+        # push long tmux/Neovim rows outside the viewport. Commands remain copyable.
+        if entry.kind == "command":
+            copy = QPushButton("Copy")
+            copy.setObjectName("ghostButton")
+            copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(entry.value))
+            root.addWidget(copy, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        if entry.action == "run" and not entry.danger:
-            run = QPushButton("Run")
-            run.clicked.connect(lambda: subprocess.Popen(["bash", "-lc", entry.value]))
-            root.addWidget(run)
+            if entry.action == "run" and not entry.danger:
+                run = QPushButton("Run")
+                run.clicked.connect(lambda: subprocess.Popen(["bash", "-lc", entry.value]))
+                root.addWidget(run, 0, Qt.AlignmentFlag.AlignVCenter)
 
 
 class CollapsibleGroup(QFrame):
@@ -128,6 +196,9 @@ class HudWindow(QMainWindow):
         self.sections = load_sections()
         detected = detect_groups()
         if detected:
+            conflict_group = _kde_conflict_group(detected)
+            if conflict_group:
+                detected.insert(0, conflict_group)
             self.sections.insert(0, Section("detected", "Detected", "◉", detected))
         self.visible_groups: list[CollapsibleGroup] = []
 
@@ -165,6 +236,10 @@ class HudWindow(QMainWindow):
         self.tree.setFixedWidth(285)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tree.setUniformRowHeights(True)
+        # KDE's item-view focus indicator can render as a bright little square
+        # beside the selected row. Mouse selection is enough for this launcher;
+        # the background highlight remains the selection affordance.
+        self.tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tree.itemSelectionChanged.connect(self.render_current)
         body.addWidget(self.tree)
 
@@ -205,9 +280,7 @@ class HudWindow(QMainWindow):
             self._add_group(item, section_id, child)
 
     def _all_groups(self, groups):
-        for group in groups:
-            yield group
-            yield from self._all_groups(group.children)
+        yield from _walk_groups(groups)
 
     def _selected_group(self):
         items = self.tree.selectedItems()
@@ -281,8 +354,6 @@ class HudWindow(QMainWindow):
             entries = [e for e in g.entries if self._matches(e, query)]
             if not entries:
                 continue
-            # Keep small groups open; large groups start collapsed unless the
-            # user drilled directly into that exact leaf group or is searching.
             expanded = bool(query) or (group is g) or len(entries) <= 8
             panel = CollapsibleGroup(g, entries, expanded=expanded)
             self.visible_groups.append(panel)
