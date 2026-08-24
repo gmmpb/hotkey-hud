@@ -6,7 +6,22 @@ import sys
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea, QSizePolicy, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .data_loader import load_sections
 from .detectors import detect_groups
@@ -21,6 +36,7 @@ class EntryCard(QFrame):
         root = QHBoxLayout(self)
         root.setContentsMargins(14, 11, 14, 11)
         root.setSpacing(12)
+
         text = QVBoxLayout()
         title = QLabel(entry.title)
         title.setObjectName("entryTitle")
@@ -36,19 +52,68 @@ class EntryCard(QFrame):
             desc.setObjectName("entryDescription")
             text.addWidget(desc)
         root.addLayout(text, 1)
+
         value = QLabel(entry.value)
         value.setTextInteractionFlags(Qt.TextSelectableByMouse)
         value.setObjectName("keycap" if entry.kind == "shortcut" else "commandPill")
         value.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         root.addWidget(value)
+
         copy = QPushButton("Copy")
         copy.setObjectName("ghostButton")
         copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(entry.value))
         root.addWidget(copy)
+
         if entry.action == "run" and not entry.danger:
             run = QPushButton("Run")
             run.clicked.connect(lambda: subprocess.Popen(["bash", "-lc", entry.value]))
             root.addWidget(run)
+
+
+class CollapsibleGroup(QFrame):
+    def __init__(self, group: Group, entries: list[Entry], expanded: bool = True, parent=None):
+        super().__init__(parent)
+        self.group = group
+        self.setObjectName("groupPanel")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.toggle = QPushButton()
+        self.toggle.setObjectName("groupToggle")
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(expanded)
+        self.toggle.clicked.connect(self._sync_state)
+        root.addWidget(self.toggle)
+
+        self.body = QWidget()
+        self.body.setObjectName("groupBody")
+        body_layout = QVBoxLayout(self.body)
+        body_layout.setContentsMargins(10, 8, 10, 10)
+        body_layout.setSpacing(8)
+
+        if group.description:
+            desc = QLabel(group.description)
+            desc.setWordWrap(True)
+            desc.setObjectName("groupDescription")
+            body_layout.addWidget(desc)
+
+        for entry in entries:
+            body_layout.addWidget(EntryCard(entry))
+
+        root.addWidget(self.body)
+        self._sync_state()
+
+    def _sync_state(self):
+        expanded = self.toggle.isChecked()
+        self.body.setVisible(expanded)
+        marker = "▾" if expanded else "▸"
+        self.toggle.setText(f"{marker}  {self.group.icon}  {self.group.title}")
+
+    def set_expanded(self, expanded: bool):
+        self.toggle.setChecked(expanded)
+        self._sync_state()
 
 
 class HudWindow(QMainWindow):
@@ -59,10 +124,12 @@ class HudWindow(QMainWindow):
         self.setMinimumSize(840, 560)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+
         self.sections = load_sections()
         detected = detect_groups()
         if detected:
             self.sections.insert(0, Section("detected", "Detected", "◉", detected))
+        self.visible_groups: list[CollapsibleGroup] = []
 
         shell = QFrame()
         shell.setObjectName("shell")
@@ -95,7 +162,9 @@ class HudWindow(QMainWindow):
         self.tree.setObjectName("sidebar")
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(14)
-        self.tree.setFixedWidth(270)
+        self.tree.setFixedWidth(285)
+        self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tree.setUniformRowHeights(True)
         self.tree.itemSelectionChanged.connect(self.render_current)
         body.addWidget(self.tree)
 
@@ -103,6 +172,7 @@ class HudWindow(QMainWindow):
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.setSpacing(10)
+
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
@@ -122,12 +192,10 @@ class HudWindow(QMainWindow):
             for group in section.groups:
                 self._add_group(parent, section.id, group)
             parent.setExpanded(True)
+
         if self.tree.topLevelItemCount():
             first = self.tree.topLevelItem(0)
-            if first.childCount():
-                self.tree.setCurrentItem(first.child(0))
-            else:
-                self.tree.setCurrentItem(first)
+            self.tree.setCurrentItem(first.child(0) if first.childCount() else first)
 
     def _add_group(self, parent, section_id: str, group: Group):
         item = QTreeWidgetItem([f"{group.icon}  {group.title}"])
@@ -161,16 +229,22 @@ class HudWindow(QMainWindow):
         return all(token in hay for token in query.lower().split())
 
     def _clear_content(self):
+        self.visible_groups = []
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.deleteLater()
 
+    def _set_all_groups(self, expanded: bool):
+        for panel in self.visible_groups:
+            panel.set_expanded(expanded)
+
     def render_current(self):
         self._clear_content()
         section, group = self._selected_group()
         query = self.search.text().strip()
+
         if query:
             groups = []
             for sec in self.sections:
@@ -184,28 +258,42 @@ class HudWindow(QMainWindow):
             title = section.title
         else:
             return
+
+        heading = QHBoxLayout()
         page_title = QLabel(title)
         page_title.setObjectName("pageTitle")
-        self.content_layout.addWidget(page_title)
+        heading.addWidget(page_title)
+        heading.addStretch()
+
+        expand_all = QPushButton("Expand all")
+        expand_all.setObjectName("ghostButton")
+        expand_all.clicked.connect(lambda: self._set_all_groups(True))
+        heading.addWidget(expand_all)
+
+        collapse_all = QPushButton("Collapse all")
+        collapse_all.setObjectName("ghostButton")
+        collapse_all.clicked.connect(lambda: self._set_all_groups(False))
+        heading.addWidget(collapse_all)
+        self.content_layout.addLayout(heading)
+
         shown = 0
         for g in groups:
             entries = [e for e in g.entries if self._matches(e, query)]
             if not entries:
                 continue
-            header = QLabel(f"{g.icon}  {g.title}")
-            header.setObjectName("groupTitle")
-            self.content_layout.addWidget(header)
-            if g.description:
-                d = QLabel(g.description)
-                d.setObjectName("groupDescription")
-                self.content_layout.addWidget(d)
-            for entry in entries:
-                self.content_layout.addWidget(EntryCard(entry))
-                shown += 1
+            # Keep small groups open; large groups start collapsed unless the
+            # user drilled directly into that exact leaf group or is searching.
+            expanded = bool(query) or (group is g) or len(entries) <= 8
+            panel = CollapsibleGroup(g, entries, expanded=expanded)
+            self.visible_groups.append(panel)
+            self.content_layout.addWidget(panel)
+            shown += len(entries)
+
         if shown == 0:
             empty = QLabel("No matching shortcuts or commands")
             empty.setObjectName("empty")
             self.content_layout.addWidget(empty)
+
         self.content_layout.addStretch(1)
 
     def _install_shortcuts(self):
