@@ -1,0 +1,208 @@
+sections:
+  - id: shortcuts
+    title: Shortcuts
+    icon: "⌨"
+    groups:
+      - id: kde
+        title: KDE / Plasma
+        icon: "◆"
+        entries:
+          - {title: "Edit tiling layout", value: "Meta+T", kind: shortcut, tags: [kde, kwin, tiling]}
+          - {title: "Overview", value: "Meta+W", kind: shortcut, tags: [kde, overview]}
+          - {title: "Switch windows", value: "Alt+Tab", kind: shortcut, tags: [kde, windows]}
+      - id: browsers
+        title: Browsers
+        icon: "◎"
+        children:
+          - id: firefox
+            title: Firefox
+            icon: "F"
+            entries:
+              - {title: "Address bar", value: "Ctrl+L", kind: shortcut, tags: [firefox, browser]}
+              - {title: "New tab", value: "Ctrl+T", kind: shortcut, tags: [firefox, browser]}
+              - {title: "Close tab", value: "Ctrl+W", kind: shortcut, tags: [firefox, browser]}
+              - {title: "Reopen closed tab", value: "Ctrl+Shift+T", kind: shortcut, tags: [firefox, browser]}
+              - {title: "Find", value: "Ctrl+F", kind: shortcut, tags: [firefox, browser]}
+          - id: chrome
+            title: Chrome
+            icon: "C"
+            entries:
+              - {title: "Address bar", value: "Ctrl+L", kind: shortcut, tags: [chrome, browser]}
+              - {title: "New tab", value: "Ctrl+T", kind: shortcut, tags: [chrome, browser]}
+              - {title: "Reopen closed tab", value: "Ctrl+Shift+T", kind: shortcut, tags: [chrome, browser]}
+      - id: terminal-tools
+        title: Terminal tools
+        icon: ">_"
+        children:
+          - id: tmux
+            title: tmux
+            icon: "▣"
+            entries:
+              - {title: "New window", value: "prefix · c", kind: shortcut, tags: [tmux]}
+              - {title: "Split vertical", value: "prefix · %", kind: shortcut, tags: [tmux]}
+              - {title: "Split horizontal", value: "prefix · \"", kind: shortcut, tags: [tmux]}
+              - {title: "Zoom pane", value: "prefix · z", kind: shortcut, tags: [tmux]}
+          - id: neovim
+            title: Neovim
+            icon: "N"
+            entries:
+              - {title: "Go to definition", value: "gd", kind: shortcut, tags: [nvim, lsp]}
+              - {title: "Comment line", value: "gcc", kind: shortcut, tags: [nvim, comment]}
+      - id: kde-apps
+        title: KDE apps
+        icon: "◇"
+        children:
+          - id: dolphin
+            title: Dolphin
+            icon: "D"
+            entries:
+              - {title: "Location bar", value: "Ctrl+L", kind: shortcut, tags: [dolphin]}
+              - {title: "Terminal panel", value: "F4", kind: shortcut, tags: [dolphin, terminal]}
+          - id: konsole
+            title: Konsole
+            icon: "K"
+            entries:
+              - {title: "New tab", value: "Ctrl+Shift+T", kind: shortcut, tags: [konsole]}
+              - {title: "Close tab", value: "Ctrl+Shift+W", kind: shortcut, tags: [konsole]}
+
+  - id: commands
+    title: Commands
+    icon: ">_"
+    groups:
+      - id: systemd
+        title: systemd
+        icon: "S"
+        entries:
+          - {title: "Service status", value: "systemctl status <service>", tags: [systemctl, service]}
+          - {title: "Start service", value: "sudo systemctl start <service>", tags: [systemctl, service]}
+          - {title: "Restart service", value: "sudo systemctl restart <service>", tags: [systemctl, service]}
+          - {title: "Enable and start", value: "sudo systemctl enable --now <service>", tags: [systemctl, service]}
+          - {title: "Follow service logs", value: "journalctl -fu <service>", tags: [journalctl, logs]}
+          - {title: "Detailed service errors", value: "journalctl -xeu <service>", tags: [journalctl, logs]}
+      - id: docker
+        title: Docker
+        icon: "▧"
+        entries:
+          - {title: "Running containers", value: "docker ps", action: run, tags: [docker, containers]}
+          - {title: "All containers", value: "docker ps -a", tags: [docker, containers]}
+          - {title: "Follow logs", value: "docker logs -f <container>", tags: [docker, logs]}
+          - {title: "Shell into container", value: "docker exec -it <container> bash", tags: [docker, exec]}
+          - {title: "Compose up", value: "docker compose up -d", tags: [docker, compose]}
+          - {title: "Compose down", value: "docker compose down", tags: [docker, compose]}
+          - {title: "Compose logs", value: "docker compose logs -f", tags: [docker, compose, logs]}
+          - {title: "Disk usage", value: "docker system df", action: run, tags: [docker, disk]}
+          - {title: "Prune unused data", value: "docker system prune", danger: true, tags: [docker, cleanup, destructive]}
+      - id: github
+        title: GitHub / Actions
+        icon: "GH"
+        children:
+          - id: gh-cli
+            title: GitHub CLI
+            icon: "GH"
+            entries:
+              - {title: "List workflow runs", value: "gh run list", tags: [github, actions, ci]}
+              - {title: "View run", value: "gh run view <run-id>", tags: [github, actions, ci]}
+              - {title: "Watch run", value: "gh run watch <run-id>", tags: [github, actions, ci]}
+              - {title: "Rerun failed jobs", value: "gh run rerun <run-id> --failed", tags: [github, actions, ci]}
+          - id: gh-runner
+            title: Self-hosted runner
+            icon: "↻"
+            entries:
+              - {title: "Find runner services", value: "systemctl list-units 'actions.runner*'", tags: [github, runner, systemctl]}
+              - {title: "Runner service status", value: "systemctl status 'actions.runner*'", tags: [github, runner, systemctl]}
+              - {title: "Runner logs", value: "journalctl -u 'actions.runner.*' -f", tags: [github, runner, journalctl]}
+              - {title: "Runner local status", value: "./svc.sh status", tags: [github, runner]}
+      - id: git
+        title: Git
+        icon: "⑂"
+        entries:
+          - {title: "Graph log", value: "git log --oneline --graph --decorate --all", tags: [git, history]}
+          - {title: "Staged diff", value: "git diff --staged", tags: [git, diff]}
+          - {title: "Unstage file", value: "git restore --staged <file>", tags: [git, restore]}
+          - {title: "Reflog", value: "git reflog", tags: [git, recovery]}
+          - {title: "Branches with upstream", value: "git branch -vv", tags: [git, branches]}
+          - {title: "Worktrees", value: "git worktree list", tags: [git, worktree]}
+      - id: cloud-iac
+        title: Cloud & IaC
+        icon: "☁"
+        children:
+          - id: aws
+            title: AWS CLI
+            icon: "AWS"
+            entries:
+              - {title: "Who am I?", value: "aws sts get-caller-identity", action: run, tags: [aws, identity, auth]}
+              - {title: "Current AWS config", value: "aws configure list", tags: [aws, auth, profile]}
+              - {title: "Tail CloudWatch logs", value: "aws logs tail <log-group> --follow", tags: [aws, logs, cloudwatch]}
+              - {title: "List S3", value: "aws s3 ls", tags: [aws, s3]}
+          - id: terraform
+            title: Terraform
+            icon: "TF"
+            entries:
+              - {title: "Format recursively", value: "terraform fmt -recursive", tags: [terraform, fmt]}
+              - {title: "Validate", value: "terraform validate", tags: [terraform, validate]}
+              - {title: "Plan", value: "terraform plan", tags: [terraform, plan]}
+              - {title: "List state", value: "terraform state list", tags: [terraform, state]}
+              - {title: "Inspect state resource", value: "terraform state show <resource>", tags: [terraform, state]}
+              - {title: "Outputs", value: "terraform output", tags: [terraform, output]}
+      - id: node
+        title: Node / pnpm
+        icon: "JS"
+        entries:
+          - {title: "Why is package installed?", value: "pnpm why <package>", tags: [pnpm, dependency]}
+          - {title: "Outdated packages", value: "pnpm outdated", tags: [pnpm, dependency]}
+          - {title: "Run binary", value: "pnpm exec <command>", tags: [pnpm, exec]}
+          - {title: "Filter workspace package", value: "pnpm --filter <package> <command>", tags: [pnpm, workspace, monorepo]}
+      - id: linux
+        title: Linux toolbox
+        icon: "⌁"
+        children:
+          - id: networking
+            title: Networking / ports
+            icon: "↔"
+            entries:
+              - {title: "Listening ports", value: "ss -lntup", tags: [linux, network, ports]}
+              - {title: "Who owns port 3000?", value: "sudo lsof -i :3000", tags: [linux, network, ports]}
+              - {title: "Routes", value: "ip route", tags: [linux, network]}
+              - {title: "HTTP headers", value: "curl -I <url>", tags: [curl, http]}
+              - {title: "Verbose HTTP", value: "curl -v <url>", tags: [curl, http]}
+              - {title: "DNS lookup", value: "dig <domain>", tags: [linux, dns]}
+          - id: processes
+            title: Processes
+            icon: "⚙"
+            entries:
+              - {title: "Find process + full command", value: "pgrep -af <name>", tags: [linux, process]}
+              - {title: "Kill process", value: "kill <pid>", tags: [linux, process]}
+              - {title: "Kill by name", value: "pkill <name>", tags: [linux, process]}
+              - {title: "Interactive monitor", value: "htop", tags: [linux, process]}
+          - id: disk-files
+            title: Disk / files
+            icon: "▥"
+            entries:
+              - {title: "Filesystem usage", value: "df -h", tags: [linux, disk]}
+              - {title: "Directory sizes", value: "du -h --max-depth=1 | sort -h", tags: [linux, disk, size]}
+              - {title: "Block devices", value: "lsblk", tags: [linux, disk]}
+              - {title: "Fast content search", value: "rg '<text>'", tags: [ripgrep, search]}
+              - {title: "Fast file search", value: "fd '<name>'", tags: [fd, search]}
+          - id: logs-pipes
+            title: Logs / pipes / clipboard
+            icon: "|>"
+            entries:
+              - {title: "Show output and copy it", value: "<command> 2>&1 | tee >(wl-copy)", tags: [pipe, clipboard, stderr, tee]}
+              - {title: "Show + save output", value: "<command> 2>&1 | tee output.log", tags: [pipe, logs, tee]}
+              - {title: "Copy file", value: "wl-copy < <file>", tags: [wayland, clipboard]}
+              - {title: "Paste clipboard", value: "wl-paste", tags: [wayland, clipboard]}
+              - {title: "Pretty-print clipboard JSON", value: "wl-paste | jq .", tags: [clipboard, json, jq]}
+              - {title: "Count duplicates", value: "sort | uniq -c | sort -nr", tags: [text, sort]}
+
+  - id: snippets
+    title: Quick recipes
+    icon: "✦"
+    groups:
+      - id: troubleshooting
+        title: Troubleshooting
+        icon: "?"
+        entries:
+          - {title: "What is using this port?", value: "sudo lsof -nP -iTCP:<port> -sTCP:LISTEN", description: "Find the process listening on a TCP port"}
+          - {title: "Why did this service fail?", value: "systemctl status <service> --no-pager && journalctl -xeu <service> --no-pager | tail -n 100"}
+          - {title: "Capture a failing command for sharing", value: "<command> 2>&1 | tee >(wl-copy)", description: "Keep output visible and copy the same output to the Wayland clipboard"}
+          - {title: "Show recent kernel errors", value: "journalctl -k -p warning..alert --since today", tags: [kernel, logs]}
