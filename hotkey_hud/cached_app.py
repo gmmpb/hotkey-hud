@@ -5,9 +5,9 @@ import os
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QShortcut
 
 from .kde_perf_app import HudWindow as KdeHudWindow
 from .models import Entry, Group
@@ -108,6 +108,13 @@ class HudWindow(KdeHudWindow):
             if key.startswith("Alt+"):
                 shortcut.setEnabled(False)
 
+        # Make the sidebar a normal keyboard-navigable tree. Clicking it or
+        # pressing F6 gives it focus; then plain arrows navigate naturally:
+        # Up/Down move rows and Left/Right collapse/expand branches.
+        self.tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.tree.setTabKeyNavigation(True)
+        QShortcut(QKeySequence("F6"), self, activated=self._focus_sidebar)
+
         # The base window intentionally starts without detected data so first
         # paint is immediate. On subsequent launches, hydrate from disk before
         # the event loop starts; the background scan then only refreshes it.
@@ -121,6 +128,12 @@ class HudWindow(KdeHudWindow):
         # card reconstruction. Wait until the user has actually paused typing.
         if self._search_timer is not None:
             self._search_timer.setInterval(420)
+
+    def _focus_sidebar(self):
+        self.tree.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        current = self.tree.currentItem()
+        if current is not None:
+            self.tree.scrollToItem(current)
 
     def _poll_detection(self):
         if not self._detect_future:
