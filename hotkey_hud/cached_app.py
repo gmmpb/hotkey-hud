@@ -20,8 +20,6 @@ def _cache_path() -> Path:
 
 
 def _instance_name() -> str:
-    # QLocalServer names are local to the machine. Include the uid so separate
-    # desktop users never signal each other's HUD process.
     try:
         return f"hotkey-hud-{os.getuid()}"
     except AttributeError:
@@ -111,31 +109,21 @@ class HudWindow(KdeHudWindow):
         self._cached_serialized = cached_serialized
         super().__init__()
 
-        # Be defensive about older/inherited shortcut layers: the HUD must never
-        # own Alt+Arrow. KWin remains the sole authority for those combinations.
         for shortcut in self.findChildren(QShortcut):
             key = shortcut.key().toString()
             if key.startswith("Alt+"):
                 shortcut.setEnabled(False)
 
-        # Make the sidebar a normal keyboard-navigable tree. Clicking it or
-        # pressing F6 gives it focus; then plain arrows navigate naturally:
-        # Up/Down move rows and Left/Right collapse/expand branches.
         self.tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.tree.setTabKeyNavigation(True)
         QShortcut(QKeySequence("F6"), self, activated=self._focus_sidebar)
 
-        # The base window intentionally starts without detected data so first
-        # paint is immediate. On subsequent launches, hydrate from disk before
-        # the event loop starts; the background scan then only refreshes it.
         if cached_groups:
             self.detected_groups = cached_groups
             preferred = self._current_selection_key() or self._pending_selection
             self._rebuild_sections(preferred)
             self.status.setText("cached shortcuts · refreshing in background")
 
-        # 140 ms was short enough that normal typing repeatedly hit expensive Qt
-        # card reconstruction. Wait until the user has actually paused typing.
         if self._search_timer is not None:
             self._search_timer.setInterval(420)
 
@@ -145,13 +133,49 @@ class HudWindow(KdeHudWindow):
         if current is not None:
             self.tree.scrollToItem(current)
 
-    def bring_to_front(self):
-        # Repeated launcher/hotkey invocations should reuse this window. Restore
-        # it if minimized/hidden and then ask KWin/Wayland for activation.
-        if self.isMinimized():
-            self.showNormal()
-        elif not self.isVisible():
-            self.show()
+    def bring_to_front(self, activation_token: str = "", startup_id: str = ""):
+        # On Wayland the fresh launcher process owns the XDG activation token.
+        # The duplicate instance forwards it here so KWin can treat this as a
+        # user-initiated activation rather than focus stealing.
+        previous_token = os.environ.get("XDG_ACTIVATION_TOKEN")
+        previous_startup = os.environ.get("DESKTOP_STARTUP_ID")
+        if activation_token:
+            os.environ["XDG_ACTIVATION_TOKEN"] = activation_token
+        if startup_id:
+            os.environ["DESKTOP_STARTUP_ID"] = startup_id
+
+        try:
+            if self.isMinimized():
+                self.showNormal()
+            elif not self.isVisible():
+                self.show()
+
+            # WindowActive plus requestActivate covers Qt's widget and native
+            # window paths. The forwarded token makes the Wayland request valid.
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowActive)
+            self.raise_()
+            self.activateWindow()
+            handle = self.windowHandle()
+            if handle is not None:
+                try:
+                    handle.requestActivate()
+                except Exception:
+                    pass
+
+            # One more activation on the next event-loop turn helps when the
+            # window had just been restored from a minimized state.
+            QTimer.singleShot(0, self._request_native_activation)
+        finally:
+            if previous_token is None:
+                os.environ.pop("XDG_ACTIVATION_TOKEN", None)
+            else:
+                os.environ["XDG_ACTIVATION_TOKEN"] = previous_token
+            if previous_startup is None:
+                os.environ.pop("DESKTOP_STARTUP_ID", None)
+            else:
+                os.environ["DESKTOP_STARTUP_ID"] = previous_startup
+
+    def _request_native_activation(self):
         self.raise_()
         self.activateWindow()
         handle = self.windowHandle()
@@ -184,8 +208,6 @@ class HudWindow(KdeHudWindow):
                 self._rebuild_sections(preferred)
             self.status.setText("live shortcuts · cache up to date")
         except Exception as exc:
-            # Keep a valid cache visible if refresh fails. A transient detector
-            # error should not make a previously-working launch worse.
             if self.detected_groups:
                 self.status.setText(f"cached shortcuts · refresh failed: {type(exc).__name__}")
             else:
@@ -197,11 +219,17 @@ class HudWindow(KdeHudWindow):
 def _signal_existing_instance(server_name: str) -> bool:
     socket = QLocalSocket()
     socket.connectToServer(server_name)
-    if not socket.waitForConnected(120):
+    if not socket.waitForConnected(150):
         return False
-    socket.write(b"activate\n")
+
+    payload = {
+        "action": "activate",
+        "activation_token": os.environ.get("XDG_ACTIVATION_TOKEN", ""),
+        "startup_id": os.environ.get("DESKTOP_STARTUP_ID", ""),
+    }
+    socket.write((json.dumps(payload) + "\n").encode("utf-8"))
     socket.flush()
-    socket.waitForBytesWritten(120)
+    socket.waitForBytesWritten(150)
     socket.disconnectFromServer()
     return True
 
@@ -215,26 +243,36 @@ def main():
     if _signal_existing_instance(server_name):
         return
 
-    # The previous process may have crashed and left a stale local-server socket.
     QLocalServer.removeServer(server_name)
     server = QLocalServer(app)
     if not server.listen(server_name):
-        # A process may have won the race between the first connection attempt
-        # and listen(). Prefer activating it instead of opening a duplicate.
         if _signal_existing_instance(server_name):
             return
 
     window = HudWindow()
+
+    def process_connection(connection: QLocalSocket):
+        raw = bytes(connection.readAll()).decode("utf-8", errors="replace").strip()
+        token = ""
+        startup_id = ""
+        if raw:
+            try:
+                payload = json.loads(raw.splitlines()[0])
+                token = str(payload.get("activation_token", ""))
+                startup_id = str(payload.get("startup_id", ""))
+            except Exception:
+                pass
+        window.bring_to_front(token, startup_id)
+        connection.disconnectFromServer()
 
     def handle_activation():
         while server.hasPendingConnections():
             connection = server.nextPendingConnection()
             if connection is None:
                 break
-            connection.readyRead.connect(window.bring_to_front)
-            # The signal itself is enough; don't wait for payload parsing.
-            window.bring_to_front()
-            connection.disconnectFromServer()
+            connection.readyRead.connect(lambda c=connection: process_connection(c))
+            if connection.bytesAvailable() > 0:
+                process_connection(connection)
 
     server.newConnection.connect(handle_activation)
 
