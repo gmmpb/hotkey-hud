@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Hotkey HUD
+Comment=Search shortcuts and forgotten commands
+Exec=hotkey-hud
+Icon=input-keyboard
+Terminal=false
+Categories=Utility;Development;
+Keywords=hotkey;shortcut;command;cheatsheet;
