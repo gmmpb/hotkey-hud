@@ -7,6 +7,7 @@ import sys
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
 from .kde_perf_app import HudWindow as KdeHudWindow
@@ -16,6 +17,15 @@ from .models import Entry, Group
 def _cache_path() -> Path:
     root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
     return root / "hotkey-hud" / "detected.json"
+
+
+def _instance_name() -> str:
+    # QLocalServer names are local to the machine. Include the uid so separate
+    # desktop users never signal each other's HUD process.
+    try:
+        return f"hotkey-hud-{os.getuid()}"
+    except AttributeError:
+        return "hotkey-hud"
 
 
 def _entry_to_dict(entry: Entry) -> dict:
@@ -135,6 +145,22 @@ class HudWindow(KdeHudWindow):
         if current is not None:
             self.tree.scrollToItem(current)
 
+    def bring_to_front(self):
+        # Repeated launcher/hotkey invocations should reuse this window. Restore
+        # it if minimized/hidden and then ask KWin/Wayland for activation.
+        if self.isMinimized():
+            self.showNormal()
+        elif not self.isVisible():
+            self.show()
+        self.raise_()
+        self.activateWindow()
+        handle = self.windowHandle()
+        if handle is not None:
+            try:
+                handle.requestActivate()
+            except Exception:
+                pass
+
     def _poll_detection(self):
         if not self._detect_future:
             return
@@ -168,11 +194,50 @@ class HudWindow(KdeHudWindow):
             self._pending_selection = ("", None)
 
 
+def _signal_existing_instance(server_name: str) -> bool:
+    socket = QLocalSocket()
+    socket.connectToServer(server_name)
+    if not socket.waitForConnected(120):
+        return False
+    socket.write(b"activate\n")
+    socket.flush()
+    socket.waitForBytesWritten(120)
+    socket.disconnectFromServer()
+    return True
+
+
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Hotkey HUD")
     app.setOrganizationName("gmmpb")
+
+    server_name = _instance_name()
+    if _signal_existing_instance(server_name):
+        return
+
+    # The previous process may have crashed and left a stale local-server socket.
+    QLocalServer.removeServer(server_name)
+    server = QLocalServer(app)
+    if not server.listen(server_name):
+        # A process may have won the race between the first connection attempt
+        # and listen(). Prefer activating it instead of opening a duplicate.
+        if _signal_existing_instance(server_name):
+            return
+
     window = HudWindow()
+
+    def handle_activation():
+        while server.hasPendingConnections():
+            connection = server.nextPendingConnection()
+            if connection is None:
+                break
+            connection.readyRead.connect(window.bring_to_front)
+            # The signal itself is enough; don't wait for payload parsing.
+            window.bring_to_front()
+            connection.disconnectFromServer()
+
+    server.newConnection.connect(handle_activation)
+
     window.show()
     window.raise_()
     window.activateWindow()
